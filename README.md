@@ -53,7 +53,7 @@ Script robusto y profesional para automatizar la descarga, validación y prueba 
 - Mínimo 50GB de espacio libre (para los 5 modelos)
 - 8GB RAM recomendado
 
-## 🔧 Instalación
+##  Instalación
 
 ```bash
 # Descargar el script
@@ -201,7 +201,7 @@ export MAX_TOKENS=500
 | **Qwen 2.5 7B Q4_K_M** | ~4.4GB | 32K | Multilingüe, código |
 | **Phi 3.5 Mini Q4_K_M** | ~2.3GB | 128K | Modelo ligero, rápido |
 
-## 🔍 Validación de Modelos
+##  Validación de Modelos
 
 El script incluye múltiples capas de validación:
 
@@ -210,7 +210,7 @@ El script incluye múltiples capas de validación:
 3. **Checksum SHA256**: Opcional, cuando está disponible
 4. **Test de Inferencia**: Ejecuta prompt de prueba
 
-## 🐛 Troubleshooting
+## Troubleshooting
 
 ### Error: "No se encontró binario ejecutable"
 
