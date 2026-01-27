@@ -12,32 +12,40 @@ Script robusto y profesional para automatizar la descarga, validación y prueba 
    - Colores en terminal para mejor visualización
    - Modo verbose para debugging
 
-2. **Robustez y Recuperación**
+2. **Barras de Progreso Visuales**
+   - Barra de progreso durante descarga de modelos
+   - Indicador de tamaño descargado vs total
+   - Múltiples métodos de descarga con progreso
+   - Progreso en benchmark de modelos
+   - Indicadores visuales con bloques Unicode (█░)
+
+3. **Robustez y Recuperación**
    - Validación GGUF mediante magic number
    - Verificación de checksums SHA256 (opcional)
    - Sistema de reintentos automáticos
    - Recuperación ante archivos corruptos
    - Manejo inteligente de errores
 
-3. **Rendimiento Optimizado**
+4. **Rendimiento Optimizado**
    - Uso de `ccache` para compilación incremental
    - Detección automática de núcleos disponibles
    - Compilación con `-DLLAMA_NATIVE=ON` para optimizaciones específicas
    - Descarga acelerada con `hf_transfer`
+   - Librería `tqdm` para progreso óptimo
 
-4. **Flexibilidad y Control**
+5. **Flexibilidad y Control**
    - Variables de entorno para personalización
    - Modo dry-run para simulación sin ejecución
    - Skip de tests para descarga masiva
    - Control granular de rebuild y updates
 
-5. **Código Mantenible**
+6. **Código Mantenible**
    - Estructura modular con funciones bien definidas
    - Constantes readonly para seguridad
    - Documentación inline completa
    - Cumple con ShellCheck best practices
 
-6. **Características Adicionales**
+7. **Características Adicionales**
    - Banner informativo con versión
    - Resumen ejecutivo de resultados
    - Detección inteligente de binarios
@@ -201,6 +209,55 @@ export MAX_TOKENS=500
 | **Qwen 2.5 7B Q4_K_M** | ~4.4GB | 32K | Multilingüe, código |
 | **Phi 3.5 Mini Q4_K_M** | ~2.3GB | 128K | Modelo ligero, rápido |
 
+##  Barras de Progreso
+
+El script incluye **barras de progreso visuales** durante las descargas:
+
+### Ejemplo de Barra de Progreso
+
+```
+[████████████████████░░░░░░░░░░░░░░░░░░]  67% 3.2 GiB / 4.8 GiB
+```
+
+### Características de las Barras
+
+-  **Tamaño descargado**: Muestra cuánto se ha descargado
+-  **Tamaño total**: Muestra el tamaño total del archivo
+-  **Porcentaje**: Indica el progreso en %
+-  **Actualización en tiempo real**: Se actualiza sin crear nuevas líneas
+-  **Formato legible**: Usa GiB, MiB en lugar de bytes
+
+### Métodos de Descarga (en orden de prioridad)
+
+1. **Python + tqdm** (barra de progreso más completa)
+   ```
+   Descargando phi-3.5-mini-instruct-Q4_K_M.gguf:  45%|████▌     | 1.0G/2.3G [00:23<00:29, 45.2MB/s]
+   ```
+
+2. **hf CLI** (progreso nativo de Hugging Face)
+   ```
+   Downloading: 100%|██████████| 2.3G/2.3G [00:51<00:00, 44.9MB/s]
+   ```
+
+3. **Curl con barra personalizada** (fallback)
+   ```
+   [████████████████████████████████████████]  100% 2.3 GiB / 2.3 GiB
+   ```
+
+### Ver Demo de Barras de Progreso
+
+```bash
+# Ejecutar demostración visual
+./demo_progress_bar.sh
+```
+
+La demo muestra:
+- Simulación de descarga de 5 GB
+- Descarga de múltiples archivos
+- Barra con velocidad y ETA
+- Progreso de procesamiento
+- Estilos minimalistas
+
 ##  Validación de Modelos
 
 El script incluye múltiples capas de validación:
@@ -210,7 +267,7 @@ El script incluye múltiples capas de validación:
 3. **Checksum SHA256**: Opcional, cuando está disponible
 4. **Test de Inferencia**: Ejecuta prompt de prueba
 
-## Troubleshooting
+##  Troubleshooting
 
 ### Error: "No se encontró binario ejecutable"
 
@@ -326,17 +383,17 @@ Ejemplo:
 "llama-3.3-70b|meta-llama/Llama-3.3-70B-Instruct-GGUF|llama-3.3-70b-Q4_K_M.gguf|40000000000|"
 ```
 
-## Licencia
+##  Licencia
 
 Este script es de código abierto. llama.cpp está bajo licencia MIT.
 
-## Enlaces Útiles
+##  Enlaces Útiles
 
 - [llama.cpp GitHub](https://github.com/ggml-org/llama.cpp)
 - [Hugging Face Hub](https://huggingface.co)
 - [Documentación GGUF](https://github.com/ggerganov/ggml/blob/master/docs/gguf.md)
 
-## Soporte
+##  Soporte
 
 Para problemas o preguntas:
 

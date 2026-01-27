@@ -387,8 +387,19 @@ cmd_benchmark() {
   local prompt="La inteligencia artificial es"
   local n_tokens=50
   
-  printf "%-35s %15s %15s\n" "Modelo" "Tokens/seg" "Tiempo"
-  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  # Contar modelos
+  local total_models=0
+  for model_dir in "$MODELS_DIR"/*; do
+    [[ -d "$model_dir" ]] || continue
+    local gguf
+    gguf="$(find "$model_dir" -name "*.gguf" -type f | head -1)"
+    [[ -n "$gguf" ]] && ((total_models++))
+  done
+  
+  printf "%-35s %15s %15s %15s\n" "Modelo" "Tokens/seg" "Tiempo" "Progreso"
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  
+  local current_model=0
   
   for model_dir in "$MODELS_DIR"/*; do
     [[ -d "$model_dir" ]] || continue
@@ -401,6 +412,17 @@ cmd_benchmark() {
     
     [[ -n "$gguf" ]] || continue
     
+    ((current_model++))
+    
+    # Barra de progreso simple
+    local progress_pct=$((current_model * 100 / total_models))
+    local progress_bar=""
+    local filled=$((current_model * 20 / total_models))
+    for ((i=0; i<filled; i++)); do progress_bar+="█"; done
+    for ((i=filled; i<20; i++)); do progress_bar+="░"; done
+    
+    echo -ne "\r${YELLOW}Progreso: [${progress_bar}] ${progress_pct}%${NC} - Probando: $model_name..."
+    
     local start
     start="$(date +%s)"
     
@@ -409,7 +431,11 @@ cmd_benchmark() {
       -n "$n_tokens" \
       -t "$(nproc)" \
       --log-disable \
-      >/dev/null 2>&1 || continue
+      >/dev/null 2>&1 || {
+        echo -ne "\r"
+        printf "%-35s %15s %15s %15s\n" "$model_name" "${RED}ERROR${NC}" "-" "[$progress_bar]"
+        continue
+      }
     
     local end
     end="$(date +%s)"
@@ -422,8 +448,17 @@ cmd_benchmark() {
       tps="N/A"
     fi
     
-    printf "%-35s %15s %15s\n" "$model_name" "$tps" "${elapsed}s"
+    # Limpiar línea y mostrar resultado
+    echo -ne "\r"
+    printf "%-35s %15s %15s %15s\n" \
+      "$model_name" \
+      "${GREEN}$tps${NC}" \
+      "${elapsed}s" \
+      "[${progress_bar}]"
   done
+  
+  echo ""
+  echo -e "${GREEN}✓ Benchmark completado${NC}"
 }
 
 # ============================================================================

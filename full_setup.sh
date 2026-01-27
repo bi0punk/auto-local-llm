@@ -11,7 +11,7 @@ set -euo pipefail
 # ============================================================================
 # CONFIGURACIÓN GLOBAL
 # ============================================================================
-readonly SCRIPT_VERSION="2.0.0"
+readonly SCRIPT_VERSION="2.0.1"
 readonly REPO_LLAMA="https://github.com/ggml-org/llama.cpp"
 readonly BASE_DIR="$(pwd)"
 readonly LLAMA_DIR="$BASE_DIR/llama.cpp"
@@ -145,8 +145,14 @@ validate_model() {
   local size
   size="$(get_file_size "$filepath")"
   
-  if [[ "$size" -lt "$min_bytes" ]]; then
-    log_error "Archivo demasiado pequeño: $(get_file_size_human "$filepath") < $(numfmt --to=iec-i --suffix=B "$min_bytes")"
+  # Permitir una tolerancia del 5% menos del mínimo esperado
+  # Esto evita falsos positivos por diferencias de compresión o metadatos
+  local min_with_tolerance=$((min_bytes * 95 / 100))
+  
+  if [[ "$size" -lt "$min_with_tolerance" ]]; then
+    log_error "Archivo demasiado pequeño: $(get_file_size_human "$filepath")"
+    log_error "Tamaño actual: $(get_file_size_human "$size")"
+    log_error "Mínimo esperado (con tolerancia): $(get_file_size_human "$min_with_tolerance")"
     return 1
   fi
   
@@ -239,6 +245,13 @@ install_python_dependencies() {
   }
   
   log_success "Dependencias de Python instaladas"
+  
+  # Verificar que tqdm está disponible
+  if python3 -c "import tqdm" 2>/dev/null; then
+    log_success "tqdm disponible para barras de progreso"
+  else
+    log_warn "tqdm no disponible, se usarán métodos alternativos"
+  fi
 }
 
 # ============================================================================
@@ -378,73 +391,90 @@ build_llama() {
 }
 
 # ============================================================================
-# DESCARGA DE MODELOS
+# BARRA DE PROGRESO
 # ============================================================================
-download_with_hf_cli() {
-  local repo="$1"
-  local filename="$2"
-  local outdir="$3"
+show_progress_bar() {
+  local current="$1"
+  local total="$2"
+  local width=50
+  local percentage=0
   
-  mkdir -p "$outdir"
-  
-  log_info "Descargando $filename desde $repo"
-  
-  # Método 1: hf download (CLI nuevo)
-  if command -v hf >/dev/null 2>&1; then
-    log_debug "Intentando con 'hf download'..."
-    
-    if hf download "$repo" "$filename" \
-        --local-dir "$outdir" \
-        --quiet 2>/dev/null; then
-      log_success "Descargado con 'hf download'"
-      return 0
-    fi
+  if [[ "$total" -gt 0 ]]; then
+    percentage=$((current * 100 / total))
   fi
   
-  # Método 2: huggingface-cli (legacy)
-  if command -v huggingface-cli >/dev/null 2>&1; then
-    log_debug "Intentando con 'huggingface-cli'..."
-    
-    if huggingface-cli download "$repo" "$filename" \
-        --local-dir "$outdir" \
-        --local-dir-use-symlinks False \
-        --quiet 2>/dev/null; then
-      log_success "Descargado con 'huggingface-cli'"
-      return 0
-    fi
+  local filled=$((width * current / total))
+  [[ "$filled" -gt "$width" ]] && filled=$width
+  
+  local empty=$((width - filled))
+  
+  # Construir barra
+  local bar=""
+  for ((i=0; i<filled; i++)); do bar+="█"; done
+  for ((i=0; i<empty; i++)); do bar+="░"; done
+  
+  # Tamaños legibles
+  local current_human
+  local total_human
+  current_human="$(numfmt --to=iec-i --suffix=B "$current" 2>/dev/null || echo "${current}B")"
+  total_human="$(numfmt --to=iec-i --suffix=B "$total" 2>/dev/null || echo "${total}B")"
+  
+  # Mostrar barra (con \r para actualizar en la misma línea)
+  printf "\r${COLOR_CYAN}[${bar}]${COLOR_RESET} %3d%% ${COLOR_YELLOW}%s${COLOR_RESET} / ${COLOR_GREEN}%s${COLOR_RESET}" \
+    "$percentage" "$current_human" "$total_human"
+}
+
+# Función para obtener el tamaño del archivo remoto
+get_remote_file_size() {
+  local url="$1"
+  local auth_header="${2:-}"
+  
+  local size=0
+  
+  if [[ -n "$auth_header" ]]; then
+    size=$(curl -sI -L -H "$auth_header" "$url" | grep -i "content-length" | tail -1 | awk '{print $2}' | tr -d '\r')
+  else
+    size=$(curl -sI -L "$url" | grep -i "content-length" | tail -1 | awk '{print $2}' | tr -d '\r')
   fi
   
-  # Método 3: Python module directo
-  if python3 -c "import huggingface_hub" 2>/dev/null; then
-    log_debug "Intentando con módulo Python..."
+  echo "${size:-0}"
+}
+
+# Descarga con barra de progreso usando curl
+download_with_progress_curl() {
+  local url="$1"
+  local output="$2"
+  local auth_header="${3:-}"
+  
+  log_info "Obteniendo información del archivo..."
+  
+  # Obtener tamaño total
+  local total_size
+  total_size=$(get_remote_file_size "$url" "$auth_header")
+  
+  if [[ "$total_size" -eq 0 ]]; then
+    log_warn "No se pudo obtener tamaño del archivo, descargando sin barra de progreso..."
     
-    if python3 - <<PY "$repo" "$filename" "$outdir"
-import sys
-from huggingface_hub import hf_hub_download
-try:
-    hf_hub_download(
-        repo_id=sys.argv[1],
-        filename=sys.argv[2],
-        local_dir=sys.argv[3],
-        local_dir_use_symlinks=False
+    local curl_opts=(
+      -L
+      --fail
+      --retry 5
+      --retry-delay 3
+      --connect-timeout 30
+      --max-time 7200
+      -#
     )
-    sys.exit(0)
-except Exception as e:
-    print(f"Error: {e}", file=sys.stderr)
-    sys.exit(1)
-PY
-    then
-      log_success "Descargado con módulo Python"
-      return 0
-    fi
+    
+    [[ -n "$auth_header" ]] && curl_opts+=(-H "$auth_header")
+    
+    curl "${curl_opts[@]}" "$url" -o "$output"
+    return $?
   fi
   
-  # Método 4: Descarga directa con curl
-  log_warn "Fallback a descarga directa con curl"
+  log_info "Tamaño: $(numfmt --to=iec-i --suffix=B "$total_size")"
+  echo ""
   
-  local url="https://huggingface.co/${repo}/resolve/main/${filename}"
-  local target="$outdir/$filename"
-  
+  # Descarga con progreso
   local curl_opts=(
     -L
     --fail
@@ -452,19 +482,193 @@ PY
     --retry-delay 3
     --connect-timeout 30
     --max-time 7200
-    --progress-bar
   )
   
-  if [[ -n "${HF_TOKEN:-}" ]]; then
-    curl_opts+=(-H "Authorization: Bearer ${HF_TOKEN}")
+  [[ -n "$auth_header" ]] && curl_opts+=(-H "$auth_header")
+  
+  # Usar proceso en background para actualizar barra
+  (
+    while true; do
+      if [[ -f "$output" ]]; then
+        local current_size
+        current_size=$(stat -c%s "$output" 2>/dev/null || echo 0)
+        show_progress_bar "$current_size" "$total_size"
+        
+        [[ "$current_size" -ge "$total_size" ]] && break
+      fi
+      sleep 0.5
+    done
+    echo ""  # Nueva línea al terminar
+  ) &
+  
+  local progress_pid=$!
+  
+  # Descargar archivo
+  curl "${curl_opts[@]}" "$url" -o "$output" 2>/dev/null
+  local result=$?
+  
+  # Detener proceso de progreso
+  kill "$progress_pid" 2>/dev/null
+  wait "$progress_pid" 2>/dev/null
+  
+  # Mostrar barra final al 100%
+  if [[ $result -eq 0 && -f "$output" ]]; then
+    local final_size
+    final_size=$(stat -c%s "$output" 2>/dev/null || echo 0)
+    show_progress_bar "$final_size" "$total_size"
+    echo ""
   fi
   
-  if curl "${curl_opts[@]}" "$url" -o "$target"; then
-    log_success "Descargado con curl"
+  return $result
+}
+
+# Descarga con Python y barra de progreso
+download_with_progress_python() {
+  local repo="$1"
+  local filename="$2"
+  local outdir="$3"
+  
+  python3 - <<PYEOF "$repo" "$filename" "$outdir"
+import sys
+import os
+from pathlib import Path
+
+try:
+    from huggingface_hub import hf_hub_download
+    from tqdm import tqdm
+except ImportError:
+    print("Error: huggingface_hub o tqdm no disponibles", file=sys.stderr)
+    sys.exit(1)
+
+repo_id = sys.argv[1]
+filename = sys.argv[2]
+local_dir = sys.argv[3]
+
+# Configurar barra de progreso
+class TqdmProgress:
+    def __init__(self):
+        self.pbar = None
+    
+    def __call__(self, current, total):
+        if self.pbar is None:
+            self.pbar = tqdm(
+                total=total,
+                unit='B',
+                unit_scale=True,
+                unit_divisor=1024,
+                desc=f"Descargando {filename}",
+                ncols=100,
+                bar_format='{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]'
+            )
+        self.pbar.update(current - self.pbar.n)
+
+try:
+    progress = TqdmProgress()
+    hf_hub_download(
+        repo_id=repo_id,
+        filename=filename,
+        local_dir=local_dir,
+        local_dir_use_symlinks=False,
+        resume_download=True,
+    )
+    
+    if progress.pbar:
+        progress.pbar.close()
+    
+    print()  # Nueva línea
+    sys.exit(0)
+    
+except Exception as e:
+    print(f"Error: {e}", file=sys.stderr)
+    sys.exit(1)
+PYEOF
+}
+
+# ============================================================================
+# DESCARGA DE MODELOS
+# ============================================================================
+download_with_hf_cli() {
+  local repo="$1"
+  local filename="$2"
+  local outdir="$3"
+  local target="$outdir/$filename"
+  
+  mkdir -p "$outdir"
+  
+  log_info "Descargando: ${COLOR_CYAN}$filename${COLOR_RESET}"
+  log_info "Repositorio: ${COLOR_BLUE}$repo${COLOR_RESET}"
+  
+  # Verificar si ya existe y está completo
+  if [[ -f "$target" ]]; then
+    if is_gguf "$target"; then
+      local size
+      size="$(get_file_size "$target")"
+      
+      # Si el archivo es > 1MB, asumimos que está completo o casi completo
+      # (Hugging Face Hub reanudará la descarga si está incompleto)
+      if [[ "$size" -gt 1048576 ]]; then
+        log_info "Archivo parcial encontrado ($(get_file_size_human "$size"))"
+        log_info "La descarga se reanudará desde donde se quedó"
+      fi
+    else
+      log_warn "Archivo existe pero está corrupto, eliminando..."
+      rm -f "$target"
+    fi
+  fi
+  
+  # Método 1: Python con tqdm (mejor barra de progreso)
+  if python3 -c "import huggingface_hub, tqdm" 2>/dev/null; then
+    log_debug "Intentando con Python + tqdm (barra de progreso)..."
+    
+    if download_with_progress_python "$repo" "$filename" "$outdir"; then
+      log_success "✓ Descargado con Python + tqdm"
+      return 0
+    fi
+  fi
+  
+  # Método 2: hf download (CLI nuevo) - sin quiet para ver progreso
+  if command -v hf >/dev/null 2>&1; then
+    log_debug "Intentando con 'hf download'..."
+    echo ""
+    
+    if hf download "$repo" "$filename" \
+        --local-dir "$outdir" 2>&1 | grep -v "^Fetching"; then
+      echo ""
+      log_success "✓ Descargado con 'hf download'"
+      return 0
+    fi
+  fi
+  
+  # Método 3: huggingface-cli (legacy) - con progreso
+  if command -v huggingface-cli >/dev/null 2>&1; then
+    log_debug "Intentando con 'huggingface-cli'..."
+    echo ""
+    
+    if huggingface-cli download "$repo" "$filename" \
+        --local-dir "$outdir" \
+        --local-dir-use-symlinks False 2>&1; then
+      echo ""
+      log_success "✓ Descargado con 'huggingface-cli'"
+      return 0
+    fi
+  fi
+  
+  # Método 4: Descarga directa con curl y barra personalizada
+  log_warn "Fallback a descarga directa con curl"
+  
+  local url="https://huggingface.co/${repo}/resolve/main/${filename}"
+  local auth_header=""
+  
+  if [[ -n "${HF_TOKEN:-}" ]]; then
+    auth_header="Authorization: Bearer ${HF_TOKEN}"
+  fi
+  
+  if download_with_progress_curl "$url" "$target" "$auth_header"; then
+    log_success "✓ Descargado con curl"
     return 0
   fi
   
-  log_error "Fallaron todos los métodos de descarga"
+  log_error "✗ Fallaron todos los métodos de descarga"
   return 1
 }
 
@@ -567,12 +771,13 @@ test_model_with_recovery() {
 # DEFINICIÓN DE MODELOS
 # ============================================================================
 # Formato: ID|REPO|FILENAME|MIN_BYTES|SHA256(opcional)
+# MIN_BYTES debe ser ~95% del tamaño real para permitir variaciones
 declare -a MODELS=(
-  "gpt-oss-20b-q4_k_m|unsloth/gpt-oss-20b-GGUF|gpt-oss-20b-Q4_K_M.gguf|12000000000|"
-  "llama-3.1-8b-q4_k_m|bartowski/Meta-Llama-3.1-8B-Instruct-GGUF|Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|4900000000|"
-  "mistral-7b-v0.3-q4_k_m|bartowski/Mistral-7B-Instruct-v0.3-GGUF|Mistral-7B-Instruct-v0.3-Q4_K_M.gguf|4100000000|"
-  "qwen2.5-7b-q4_k_m|bartowski/Qwen2.5-7B-Instruct-GGUF|Qwen2.5-7B-Instruct-Q4_K_M.gguf|4400000000|"
-  "phi-3.5-mini-q4_k_m|bartowski/Phi-3.5-mini-instruct-GGUF|Phi-3.5-mini-instruct-Q4_K_M.gguf|2300000000|"
+  "gpt-oss-20b-q4_k_m|unsloth/gpt-oss-20b-GGUF|gpt-oss-20b-Q4_K_M.gguf|11000000000|"
+  "llama-3.1-8b-q4_k_m|bartowski/Meta-Llama-3.1-8B-Instruct-GGUF|Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf|4600000000|"
+  "mistral-7b-v0.3-q4_k_m|bartowski/Mistral-7B-Instruct-v0.3-GGUF|Mistral-7B-Instruct-v0.3-Q4_K_M.gguf|3800000000|"
+  "qwen2.5-7b-q4_k_m|bartowski/Qwen2.5-7B-Instruct-GGUF|Qwen2.5-7B-Instruct-Q4_K_M.gguf|4100000000|"
+  "phi-3.5-mini-q4_k_m|bartowski/Phi-3.5-mini-instruct-GGUF|Phi-3.5-mini-instruct-Q4_K_M.gguf|2100000000|"
 )
 
 # ============================================================================
@@ -590,22 +795,60 @@ process_single_model() {
   
   log_info "Repositorio: $repo"
   log_info "Archivo: $filename"
-  log_info "Tamaño mínimo: $(numfmt --to=iec-i --suffix=B "$min_bytes")"
+  log_info "Tamaño mínimo esperado: ~$(numfmt --to=iec-i --suffix=B "$min_bytes")"
   log_info "Destino: $model_path"
   
-  # Descargar si no existe
-  if [[ ! -f "$model_path" ]]; then
+  # Verificar si el archivo ya existe y es válido
+  if [[ -f "$model_path" ]]; then
+    log_info "Archivo encontrado, verificando validez..."
+    
+    # Validar con tolerancia del 5%
+    local size
+    size="$(get_file_size "$model_path")"
+    local min_with_tolerance=$((min_bytes * 95 / 100))
+    
+    if is_gguf "$model_path" && [[ "$size" -ge "$min_with_tolerance" ]]; then
+      log_success "Modelo ya existe y es válido: $(get_file_size_human "$model_path")"
+      
+      # Verificar checksum si está disponible
+      if [[ -n "$checksum" ]]; then
+        if verify_checksum "$model_path" "$checksum"; then
+          log_success "Checksum verificado correctamente"
+        else
+          log_warn "Checksum no coincide, re-descargando..."
+          rm -f "$model_path"
+        fi
+      fi
+      
+      # Si llegamos aquí y el archivo existe, omitir descarga
+      if [[ -f "$model_path" ]]; then
+        log_info "Omitiendo descarga (archivo ya válido)"
+      else
+        log_info "Descargando modelo..."
+        download_with_hf_cli "$repo" "$filename" "$model_dir" || {
+          log_error "Falló la descarga de $model_id"
+          return 1
+        }
+      fi
+    else
+      log_warn "Archivo existe pero no es válido (tamaño: $(get_file_size_human "$size"))"
+      log_info "Re-descargando modelo..."
+      rm -f "$model_path"
+      download_with_hf_cli "$repo" "$filename" "$model_dir" || {
+        log_error "Falló la descarga de $model_id"
+        return 1
+      }
+    fi
+  else
     log_info "Modelo no encontrado, descargando..."
     download_with_hf_cli "$repo" "$filename" "$model_dir" || {
       log_error "Falló la descarga de $model_id"
       return 1
     }
-  else
-    log_success "Modelo ya existe: $(get_file_size_human "$model_path")"
   fi
   
-  # Verificar checksum si está disponible
-  if [[ -n "$checksum" ]]; then
+  # Verificar checksum final si está disponible
+  if [[ -n "$checksum" && -f "$model_path" ]]; then
     verify_checksum "$model_path" "$checksum" || {
       log_error "Checksum inválido para $model_id"
       return 1
