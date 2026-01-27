@@ -3,6 +3,8 @@ __pycache__/
 *.py[codz]
 *$py.class
 
+llama.cpp/
+openwebui-data/
 # C extensions
 *.so
 
