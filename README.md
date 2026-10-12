@@ -1,408 +1,157 @@
-# llama.cpp Multi-Model Auto-Setup Script v2.0
+# auto-local-llm
 
-Script robusto y profesional para automatizar la descarga, validación y prueba de múltiples modelos GGUF usando llama.cpp.
+Scripts Bash para automatizar la descarga, validación y prueba de múltiples modelos GGUF usando llama.cpp en local: setup completo multi-modelo (`full_setup.sh`), utilidades de gestión de modelos (`llama_utils.sh`), setup específico para gpt-oss-20b (`setup-gptoss.sh`) y plantilla de configuración (`config_example.sh`).
 
-##  Características Principales
+## Contenido
 
-### Mejoras Implementadas
+- [Características](#características)
+- [Arquitectura](#arquitectura)
+- [Stack](#stack)
+- [Estructura del repositorio](#estructura-del-repositorio)
+- [Instalación](#instalación)
+- [Uso](#uso)
+- [Configuración](#configuración)
+- [Roadmap](#roadmap)
+- [Licencia](#licencia)
 
-1. **Logging Profesional**
-   - Sistema de logs con niveles (INFO, WARN, ERROR, DEBUG)
-   - Logs persistentes con timestamps en archivos
-   - Colores en terminal para mejor visualización
-   - Modo verbose para debugging
+## Características
 
-2. **Barras de Progreso Visuales**
-   - Barra de progreso durante descarga de modelos
-   - Indicador de tamaño descargado vs total
-   - Múltiples métodos de descarga con progreso
-   - Progreso en benchmark de modelos
-   - Indicadores visuales con bloques Unicode (█░)
+- Descarga de múltiples modelos GGUF desde Hugging Face con tres métodos en orden de prioridad: Python + tqdm, hf CLI y curl con barra de progreso (reintentos `--retry 5`).
+- Compilación de llama.cpp con CMake (`-DLLAMA_NATIVE=ON`) y `ccache` para compilación incremental.
+- Instalación automática de dependencias de sistema (git, cmake, wget, ccache) y de Python (huggingface_hub, hf_transfer, tqdm).
+- Validación de modelos: magic number GGUF, tamaño mínimo esperado y checksum SHA256 (opcional).
+- Test de inferencia por modelo con recuperación (los fallos no detienen el resto).
+- Logging con niveles (INFO/WARN/ERROR/DEBUG), colores y timestamps en `logs/`.
+- Modo `dry-run`, skip de tests y control granular de rebuild/update vía variables de entorno.
 
-3. **Robustez y Recuperación**
-   - Validación GGUF mediante magic number
-   - Verificación de checksums SHA256 (opcional)
-   - Sistema de reintentos automáticos
-   - Recuperación ante archivos corruptos
-   - Manejo inteligente de errores
+## Arquitectura
 
-4. **Rendimiento Optimizado**
-   - Uso de `ccache` para compilación incremental
-   - Detección automática de núcleos disponibles
-   - Compilación con `-DLLAMA_NATIVE=ON` para optimizaciones específicas
-   - Descarga acelerada con `hf_transfer`
-   - Librería `tqdm` para progreso óptimo
-
-5. **Flexibilidad y Control**
-   - Variables de entorno para personalización
-   - Modo dry-run para simulación sin ejecución
-   - Skip de tests para descarga masiva
-   - Control granular de rebuild y updates
-
-6. **Código Mantenible**
-   - Estructura modular con funciones bien definidas
-   - Constantes readonly para seguridad
-   - Documentación inline completa
-   - Cumple con ShellCheck best practices
-
-7. **Características Adicionales**
-   - Banner informativo con versión
-   - Resumen ejecutivo de resultados
-   - Detección inteligente de binarios
-   - Soporte para múltiples métodos de descarga
-   - Validación de tamaño mínimo de archivos
-   - Conversión de tamaños a formato legible (GiB, MiB)
-
-##  Requisitos
-
-- Ubuntu 20.04+ (o distribución Debian-based)
-- Bash 4.4+
-- Conexión a internet
-- Mínimo 50GB de espacio libre (para los 5 modelos)
-- 8GB RAM recomendado
-
-##  Instalación
-
-```bash
-# Descargar el script
-chmod +x llama_auto_setup_improved.sh
-
-# Ejecutar (instala dependencias automáticamente)
-./llama_auto_setup_improved.sh
+```mermaid
+flowchart TD
+  A[full_setup.sh<br/>main] --> B[check dependencies<br/>git cmake python3 pip]
+  B --> C[install system deps<br/>+ python deps]
+  C --> D[clone_or_update_llama<br/>ggml-org/llama.cpp]
+  D --> E[build llama.cpp<br/>CMake + ccache]
+  E --> F[Procesa cada modelo<br/>MODELS array]
+  F --> G[Descarga GGUF<br/>python+tqdm / hf CLI / curl]
+  G --> H[Valida GGUF<br/>magic + tamaño + sha256]
+  H --> I[run_inference test]
+  I --> J{skip_tests?}
+  J -->|no| K[Resumen + log en logs/]
+  J -->|sí| K
+  K --> L[llama_utils.sh<br/>gestión: list/test/chat/benchmark/verify...]
 ```
 
-##  Uso Básico
+## Stack
 
-### Ejecución Estándar
+- Bash 4.4+ (scripts con `set -euo pipefail`)
+- llama.cpp (compilación CMake)
+- Hugging Face Hub (`huggingface_hub`, `hf_transfer`, `tqdm`)
+- Python 3 (herramientas de descarga con progreso)
 
-```bash
-./llama_auto_setup_improved.sh
+## Estructura del repositorio
+
+```
+auto-local-llm/
+├── config_example.sh      # Plantilla de configuración (cp a .env y source)
+├── full_setup.sh          # Setup multi-modelo principal (5 modelos)
+├── llama_utils.sh         # Utilidades de gestión de modelos
+└── setup-gptoss.sh        # Setup específico de gpt-oss-20b
 ```
 
-### Con Token de Hugging Face (recomendado)
+## Instalación
+
+Requisitos: Ubuntu 20.04+ (o distribución base Debian), Bash 4.4+, conexión a internet, ~50 GB de espacio libre y 8 GB RAM recomendados.
+
+```bash
+git clone https://github.com/bi0punk/auto-local-llm
+cd auto-local-llm
+chmod +x full_setup.sh setup-gptoss.sh llama_utils.sh
+```
+
+El script instala las dependencias automáticamente al ejecutarse.
+
+## Uso
+
+### Setup multi-modelo (5 modelos)
+
+```bash
+./full_setup.sh
+```
+
+Con token de Hugging Face (recomendado para evitar rate limits):
 
 ```bash
 export HUGGING_FACE_TOKEN="hf_xxxxxxxxxxxx"
-./llama_auto_setup_improved.sh
+./full_setup.sh
 ```
 
-##  Variables de Entorno
-
-### Configuración de Inferencia
-
-```bash
-# Número de threads (default: todos los núcleos)
-export HILOS=8
-
-# Tamaño del contexto (default: 2048)
-export CTX=4096
-
-# Temperatura (default: 0.8)
-export TEMP=0.7
-
-# Máximo de tokens a generar (default: 100)
-export MAX_TOKENS=200
-```
-
-### Control de Comportamiento
-
-```bash
-# Forzar recompilación de llama.cpp
-export FORCE_REBUILD=1
-
-# No actualizar repositorio (mantener versión actual)
-export SKIP_GIT_PULL=1
-
-# Omitir pruebas de inferencia (solo descargar)
-export SKIP_TESTS=1
-
-# Modo verbose (mostrar debug info)
-export VERBOSE=1
-
-# Modo dry-run (simular sin ejecutar)
-export DRY_RUN=1
-```
-
-### Autenticación Hugging Face
-
-```bash
-# Token de Hugging Face (evita rate limits)
-export HUGGING_FACE_TOKEN="hf_your_token_here"
-```
-
-##  Ejemplos de Uso
-
-### Ejemplo 1: Primera Instalación Completa
-
-```bash
-# Con token de HF para mejor velocidad
-export HUGGING_FACE_TOKEN="hf_xxxxxxxxxxxx"
-./llama_auto_setup_improved.sh
-```
-
-### Ejemplo 2: Solo Descargar Modelos (Sin Tests)
+Solo descargar modelos sin tests:
 
 ```bash
 export SKIP_TESTS=1
-./llama_auto_setup_improved.sh
+./full_setup.sh
 ```
 
-### Ejemplo 3: Actualizar y Recompilar Todo
-
-```bash
-export FORCE_REBUILD=1
-export SKIP_GIT_PULL=0
-./llama_auto_setup_improved.sh
-```
-
-### Ejemplo 4: Debugging de Problemas
-
-```bash
-export VERBOSE=1
-./llama_auto_setup_improved.sh 2>&1 | tee debug.log
-```
-
-### Ejemplo 5: Simular Sin Ejecutar
+Simular sin ejecutar:
 
 ```bash
 export DRY_RUN=1
 export VERBOSE=1
-./llama_auto_setup_improved.sh
+./full_setup.sh
 ```
 
-### Ejemplo 6: Configuración de Alta Performance
+### Setup de gpt-oss-20b
 
 ```bash
-export HILOS=16
-export CTX=8192
-export TEMP=0.5
-export MAX_TOKENS=500
-./llama_auto_setup_improved.sh
+./setup-gptoss.sh
 ```
 
-##  Estructura de Directorios
-
-```
-.
-├── llama.cpp/                  # Repositorio clonado
-│   ├── build/                  # Archivos de compilación
-│   │   └── bin/
-│   │       ├── llama-cli       # Binario principal
-│   │       └── llama-run       # Binario alternativo
-│   └── models_multi/           # Modelos descargados
-│       ├── gpt-oss-20b-q4_k_m/
-│       ├── llama-3.1-8b-q4_k_m/
-│       ├── mistral-7b-v0.3-q4_k_m/
-│       ├── qwen2.5-7b-q4_k_m/
-│       └── phi-3.5-mini-q4_k_m/
-└── logs/                       # Logs de ejecución
-    └── setup_20260127_143052.log
-```
-
-##  Modelos Incluidos
-
-| Modelo | Tamaño | Contexto | Uso Recomendado |
-|--------|--------|----------|-----------------|
-| **GPT-OSS 20B Q4_K_M** | ~12GB | 4K | Tareas generales, razonamiento |
-| **Llama 3.1 8B Q4_K_M** | ~4.9GB | 128K | Chat, instrucciones |
-| **Mistral 7B v0.3 Q4_K_M** | ~4.1GB | 32K | Generación de texto |
-| **Qwen 2.5 7B Q4_K_M** | ~4.4GB | 32K | Multilingüe, código |
-| **Phi 3.5 Mini Q4_K_M** | ~2.3GB | 128K | Modelo ligero, rápido |
-
-##  Barras de Progreso
-
-El script incluye **barras de progreso visuales** durante las descargas:
-
-### Ejemplo de Barra de Progreso
-
-```
-[████████████████████░░░░░░░░░░░░░░░░░░]  67% 3.2 GiB / 4.8 GiB
-```
-
-### Características de las Barras
-
--  **Tamaño descargado**: Muestra cuánto se ha descargado
--  **Tamaño total**: Muestra el tamaño total del archivo
--  **Porcentaje**: Indica el progreso en %
--  **Actualización en tiempo real**: Se actualiza sin crear nuevas líneas
--  **Formato legible**: Usa GiB, MiB en lugar de bytes
-
-### Métodos de Descarga (en orden de prioridad)
-
-1. **Python + tqdm** (barra de progreso más completa)
-   ```
-   Descargando phi-3.5-mini-instruct-Q4_K_M.gguf:  45%|████▌     | 1.0G/2.3G [00:23<00:29, 45.2MB/s]
-   ```
-
-2. **hf CLI** (progreso nativo de Hugging Face)
-   ```
-   Downloading: 100%|██████████| 2.3G/2.3G [00:51<00:00, 44.9MB/s]
-   ```
-
-3. **Curl con barra personalizada** (fallback)
-   ```
-   [████████████████████████████████████████]  100% 2.3 GiB / 2.3 GiB
-   ```
-
-### Ver Demo de Barras de Progreso
+### Utilidades de gestión de modelos (`llama_utils.sh`)
 
 ```bash
-# Ejecutar demostración visual
-./demo_progress_bar.sh
+./llama_utils.sh list                    # lista modelos descargados
+./llama_utils.sh info <modelo>           # metadatos del modelo (GGUF + sha256)
+./llama_utils.sh test <modelo>           # test de inferencia
+./llama_utils.sh chat <modelo>           # chat interactivo
+./llama_utils.sh benchmark               # benchmark de velocidad (tokens/s)
+./llama_utils.sh verify                  # verifica integridad de todos
+./llama_utils.sh clean                   # limpia modelos corruptos
+./llama_utils.sh sizes                   # tamaños por modelo
+./llama_utils.sh remove <modelo>         # elimina un modelo
+./llama_utils.sh disk-usage              # uso de disco por modelos
 ```
 
-La demo muestra:
-- Simulación de descarga de 5 GB
-- Descarga de múltiples archivos
-- Barra con velocidad y ETA
-- Progreso de procesamiento
-- Estilos minimalistas
+Modelos incluidos por defecto en `full_setup.sh` (Q4_K_M): gpt-oss-20b, llama-3.1-8b-instruct, mistral-7b-instruct-v0.3, qwen2.5-7b-instruct y phi-3.5-mini-instruct.
 
-##  Validación de Modelos
+## Configuración
 
-El script incluye múltiples capas de validación:
+Variables de entorno (ver `config_example.sh`):
 
-1. **Magic Number GGUF**: Verifica los primeros 4 bytes (`0x47475546`)
-2. **Tamaño Mínimo**: Compara contra tamaño esperado
-3. **Checksum SHA256**: Opcional, cuando está disponible
-4. **Test de Inferencia**: Ejecuta prompt de prueba
+| Variable | Default | Descripción |
+|---|---|---|
+| `HUGGING_FACE_TOKEN` | *(vacío)* | Token de Hugging Face (evita rate limits) |
+| `HILOS` | `nproc` | Número de threads para inferencia |
+| `CTX` | `2048` | Tamaño del contexto en tokens |
+| `TEMP` | `0.8` | Temperatura de generación |
+| `MAX_TOKENS` | `100` | Máximo de tokens a generar |
+| `FORCE_REBUILD` | `0` | Forzar recompilación de llama.cpp |
+| `SKIP_GIT_PULL` | `0` | No actualizar el repositorio llama.cpp |
+| `SKIP_TESTS` | `0` | Omitir tests de inferencia (solo descarga) |
+| `PARALLEL_DOWNLOADS` | `1` | Descargas paralelas |
+| `VERBOSE` | `0` | Modo verbose (DEBUG) |
+| `DRY_RUN` | `0` | Simular sin ejecutar |
 
-##  Troubleshooting
+Códigos de salida: `0` éxito; `1` error general o algún modelo falló; `130` interrupción de usuario (Ctrl+C). Logs en `logs/setup_YYYYMMDD_HHMMSS.log`.
 
-### Error: "No se encontró binario ejecutable"
+## Roadmap
 
-```bash
-# Forzar recompilación
-export FORCE_REBUILD=1
-./llama_auto_setup_improved.sh
-```
+- [x] Setup automático multi-modelo con validación GGUF + sha256
+- [x] Utilidades de gestión (list, test, chat, benchmark, verify, clean)
+- [x] Progreso visual de descarga (tqdm / hf CLI / curl)
+- [ ] Soporte multi-GPU / despliegue en servidor de inferencia
+- [ ] Plantillas para añadir modelos con wizard
 
-### Error: "Modelo corrupto"
+## Licencia
 
-El script intenta recuperación automática. Si persiste:
-
-```bash
-# Borrar modelo y re-descargar
-rm -rf llama.cpp/models_multi/NOMBRE_MODELO
-./llama_auto_setup_improved.sh
-```
-
-### Error: Rate limit de Hugging Face
-
-```bash
-# Usar token de autenticación
-export HUGGING_FACE_TOKEN="hf_xxxxxxxxxxxx"
-./llama_auto_setup_improved.sh
-```
-
-### Descarga muy lenta
-
-```bash
-# Asegurar que hf_transfer está instalado
-python3 -m pip install --user -U hf_transfer
-export HF_HUB_ENABLE_HF_TRANSFER=1
-./llama_auto_setup_improved.sh
-```
-
-### Problemas de compilación
-
-```bash
-# Instalar dependencias manualmente
-sudo apt update
-sudo apt install -y build-essential cmake git curl python3-pip ccache
-
-# Limpiar y recompilar
-rm -rf llama.cpp/build
-export FORCE_REBUILD=1
-./llama_auto_setup_improved.sh
-```
-
-##  Logs
-
-Los logs se guardan automáticamente en `logs/setup_YYYYMMDD_HHMMSS.log`
-
-### Ver último log:
-
-```bash
-tail -f logs/setup_*.log | tail -1
-```
-
-### Buscar errores:
-
-```bash
-grep ERROR logs/setup_*.log | tail -1
-```
-
-##  Seguridad
-
-- El script usa `set -euo pipefail` para fail-fast
-- Variables readonly para prevenir modificaciones accidentales
-- Validación de comandos antes de ejecución
-- No ejecuta código descargado sin validación
-- Logs de auditoría de todas las operaciones
-
-##  Códigos de Salida
-
-- `0`: Éxito completo
-- `1`: Error general o algún modelo falló
-- `130`: Interrupción por usuario (Ctrl+C)
-
-##  Performance
-
-### Tiempos Estimados (conexión 100Mbps)
-
-- **Primera ejecución**: 30-60 minutos
-  - Clonación: 2-5 min
-  - Compilación: 5-10 min
-  - Descarga modelos: 20-45 min
-  - Tests: 5-10 min
-
-- **Ejecuciones posteriores**: 1-5 minutos
-  - Solo validación y tests
-
-### Uso de Recursos
-
-- **Disco**: ~50GB
-- **RAM (compilación)**: 4-8GB
-- **RAM (inferencia)**: 8-16GB (según modelo)
-- **CPU**: Todos los núcleos disponibles
-
-##  Contribuciones
-
-Para añadir modelos, editar la sección `MODELS` en el script:
-
-```bash
-declare -a MODELS=(
-  "id|repo|filename|min_bytes|sha256_opcional"
-)
-```
-
-Ejemplo:
-
-```bash
-"llama-3.3-70b|meta-llama/Llama-3.3-70B-Instruct-GGUF|llama-3.3-70b-Q4_K_M.gguf|40000000000|"
-```
-
-##  Licencia
-
-Este script es de código abierto. llama.cpp está bajo licencia MIT.
-
-##  Enlaces Útiles
-
-- [llama.cpp GitHub](https://github.com/ggml-org/llama.cpp)
-- [Hugging Face Hub](https://huggingface.co)
-- [Documentación GGUF](https://github.com/ggerganov/ggml/blob/master/docs/gguf.md)
-
-##  Soporte
-
-Para problemas o preguntas:
-
-1. Revisa el log en `logs/`
-2. Ejecuta con `VERBOSE=1`
-3. Verifica los requisitos del sistema
-4. Consulta la sección de troubleshooting
-
----
-
-**Versión**: 2.0.0  
-**Última actualización**: Enero 2026
+Sin archivo LICENSE declarado en el repositorio.
